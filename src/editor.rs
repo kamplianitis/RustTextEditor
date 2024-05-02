@@ -10,6 +10,8 @@ use crossterm::{
     ExecutableCommand, QueueableCommand,
 };
 
+use crate::buffer::Buffer;
+
 enum Action {
     /// Enumeration of the actions that are currently supported in the
     /// Kostakis Editor.
@@ -24,11 +26,12 @@ enum Action {
 
 #[derive(Debug)]
 enum Mode {
-    Normal,
-    Insert,
+    READ,
+    EDIT,
 }
 
 pub struct Editor {
+    buffer: Buffer,
     stdout: std::io::Stdout,
     size: (u16, u16),
     cx: u16,
@@ -45,7 +48,7 @@ impl Drop for Editor {
 }
 
 impl Editor {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(buffer: Buffer) -> anyhow::Result<Self> {
         let mut stdout = stdout();
 
         terminal::enable_raw_mode()?;
@@ -53,23 +56,42 @@ impl Editor {
         stdout.execute(terminal::Clear(terminal::ClearType::All))?;
 
         Ok(Editor {
+            buffer,
             stdout,
             cx: 0,
             cy: 0,
-            mode: Mode::Normal,
+            mode: Mode::READ,
             size: terminal::size()?,
         })
     }
 
     pub fn draw(&mut self) -> anyhow::Result<()> {
+        self.draw_buffer()?;
         self.draw_status_line()?;
         self.stdout.queue(cursor::MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
         Ok(())
     }
 
+    pub fn draw_buffer(&mut self) -> anyhow::Result<()> {
+        for (i, line) in self.buffer.lines.iter().enumerate() {
+            self.stdout.queue(cursor::MoveTo(0, i as u16))?;
+            self.stdout.queue(style::Print(line))?;
+        }
+
+        Ok(())
+    }
+
     pub fn draw_status_line(&mut self) -> anyhow::Result<()> {
-        let mode = format!("Mode: {:?}", self.mode).to_uppercase().bold();
+        let mode = format!("{:?}", self.mode).to_uppercase();
+        let position = format!("{}:{} ", self.cx, self.cy);
+        let file = format!(
+            " {}",
+            self.buffer.file.as_deref().unwrap_or("No Name Found")
+        );
+
+        let file_width = self.size.0 - mode.len() as u16 - position.len() as u16;
+
         self.stdout.queue(cursor::MoveTo(0, self.size.1 - 2))?;
         self.stdout.queue(style::PrintStyledContent(
             mode.with(Color::Rgb { r: 0, g: 0, b: 0 })
@@ -82,7 +104,7 @@ impl Editor {
         ))?;
 
         self.stdout.queue(style::PrintStyledContent(
-            "\tsrc/main.rs"
+            format!("{:<width$}", file, width = file_width as usize)
                 .with(Color::Rgb {
                     r: 255,
                     g: 255,
@@ -93,6 +115,16 @@ impl Editor {
                     r: 67,
                     g: 70,
                     b: 89,
+                }),
+        ))?;
+        self.stdout.queue(style::PrintStyledContent(
+            position
+                .with(Color::Rgb { r: 0, g: 0, b: 0 })
+                .bold()
+                .on(Color::Rgb {
+                    r: 184,
+                    g: 144,
+                    b: 243,
                 }),
         ))?;
 
@@ -127,9 +159,13 @@ impl Editor {
     }
 
     fn handle_event(&mut self, ev: event::Event) -> anyhow::Result<Option<Action>> {
+        if matches!(ev, event::Event::Resize(_, _)) {
+            self.size = terminal::size()?;
+        }
+
         match &self.mode {
-            Mode::Normal => self.handle_normal_event(ev),
-            Mode::Insert => self.handle_insert_event(ev),
+            Mode::READ => self.handle_normal_event(ev),
+            Mode::EDIT => self.handle_insert_event(ev),
         }
     }
 
@@ -141,7 +177,7 @@ impl Editor {
                 event::KeyCode::Down => Ok(Some(Action::MoveDown)),
                 event::KeyCode::Left => Ok(Some(Action::MoveLeft)),
                 event::KeyCode::Right => Ok(Some(Action::MoveRight)),
-                event::KeyCode::Char('i') => Ok(Some(Action::EnterMode(Mode::Insert))),
+                event::KeyCode::Char('i') => Ok(Some(Action::EnterMode(Mode::EDIT))),
                 _ => Ok(None),
             },
             _ => Ok(None),
@@ -151,9 +187,10 @@ impl Editor {
     fn handle_insert_event(&mut self, ev: event::Event) -> anyhow::Result<Option<Action>> {
         match ev {
             event::Event::Key(event) => match event.code {
-                event::KeyCode::Esc => Ok(Some(Action::EnterMode(Mode::Normal))),
+                event::KeyCode::Esc => Ok(Some(Action::EnterMode(Mode::READ))),
                 event::KeyCode::Char(c) => {
-                    println!("{}", c);
+                    self.stdout.queue(style::Print(c))?;
+                    self.cx += 1;
                     Ok(None)
                 }
                 _ => Ok(None),
