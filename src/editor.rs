@@ -20,7 +20,8 @@ enum Action {
     MoveDown,
     MoveRight,
     MoveLeft,
-
+    AddChar(char),
+    NewLine,
     EnterMode(Mode),
 }
 
@@ -34,6 +35,8 @@ pub struct Editor {
     buffer: Buffer,
     stdout: std::io::Stdout,
     size: (u16, u16),
+    vtop: usize,
+    vleft: usize,
     cx: u16,
     cy: u16,
     mode: Mode,
@@ -60,25 +63,39 @@ impl Editor {
             stdout,
             cx: 0,
             cy: 0,
+            vtop: 0,
+            vleft: 0,
             mode: Mode::READ,
             size: terminal::size()?,
         })
     }
 
+    fn viewport_line(&self, n: usize) -> Option<String> {
+        let buffer_line = self.vtop + n;
+        self.buffer.get(buffer_line)
+    }
+
     pub fn draw(&mut self) -> anyhow::Result<()> {
-        self.draw_buffer()?;
+        self.draw_viewport()?;
         self.draw_status_line()?;
         self.stdout.queue(cursor::MoveTo(self.cx, self.cy))?;
         self.stdout.flush()?;
         Ok(())
     }
 
-    pub fn draw_buffer(&mut self) -> anyhow::Result<()> {
-        for (i, line) in self.buffer.lines.iter().enumerate() {
-            self.stdout.queue(cursor::MoveTo(0, i as u16))?;
-            self.stdout.queue(style::Print(line))?;
-        }
+    pub fn draw_viewport(&mut self) -> anyhow::Result<()> {
+        for i in 0..(self.size.1 - 2) {
+            let line = match self.viewport_line(i as usize) {
+                None => String::new(),
+                Some(st) => st,
+            };
 
+            self.stdout.queue(cursor::MoveTo(0, i))?;
+            self.stdout.queue(style::Print(format!(
+                "{line:<widith$}",
+                widith = self.size.0 as usize
+            )))?;
+        }
         Ok(())
     }
 
@@ -142,15 +159,30 @@ impl Editor {
                     }
                     Action::MoveDown => {
                         self.cy += 1u16;
+                        if self.cy > (self.size.1 - 2) {
+                            self.cy = self.size.1 - 2;
+                        }
                     }
                     Action::MoveLeft => {
-                        self.cx = self.cx.saturating_sub(1);
+                        self.cx -= 1;
+                        if self.cx < self.vleft as u16 {
+                            self.cx = self.vleft as u16;
+                        }
                     }
                     Action::MoveRight => {
                         self.cx += 1u16;
                     }
                     Action::EnterMode(new_mode) => {
                         self.mode = new_mode;
+                    }
+                    Action::AddChar(c) => {
+                        self.stdout.queue(cursor::MoveTo(self.cx, self.cy))?;
+                        self.stdout.queue(style::Print(c))?;
+                        self.cx += 1;
+                    }
+                    Action::NewLine => {
+                        self.cx = 0;
+                        self.cy += 1;
                     }
                 }
             }
