@@ -1,0 +1,1 @@
+/home/kamplianitis/Documents/projects/rust_vim_new/target/debug/rust_vim_new: /home/kamplianitis/Documents/projects/rust_vim_new/src/main.rs /home/kamplianitis/Documents/projects/rust_vim_new/src/rope.rs
